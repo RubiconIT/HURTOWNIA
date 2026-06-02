@@ -46,7 +46,7 @@ class ApiFetchErrorRepository extends ServiceEntityRepository
         $stmt = $conn->prepare($sql);
         $res = $stmt->executeQuery([
             'command' => $commandName,
-            'today'   => date('Y-m-d 00:00:00'),
+            'today'   => date('Y-m-d H:i:s'),
         ]);
 
         return $res->rowCount() ?? 0;
