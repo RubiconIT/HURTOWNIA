@@ -25,6 +25,9 @@ class HttpClient
     private const WAIT_TIME_STEP = 10; // seconds
     private const RATE_LIMIT_WINDOW_SECONDS = 60;
     private const RATE_LIMIT_STORE_FILE = '/hurtownia_http_rate_limit.json';
+    private const RATE_LIMIT_SAFETY_FACTOR = 0.85;
+    private const RATE_LIMIT_429_BASE_PENALTY_SECONDS = 30;
+    private const RATE_LIMIT_429_MAX_PENALTY_SECONDS = 180;
     private $tryColors = [
         "\033[0;32m", // green
         "\033[0;33m", // yellow
@@ -69,6 +72,7 @@ class HttpClient
             curl_setopt($this->ch, CURLOPT_TIMEOUT, 300);
 
             $this->fetchedData = curl_exec($this->ch);
+            $this->httpCode = (int) curl_getinfo($this->ch, CURLINFO_HTTP_CODE);
             if ($this->fetchedData === false) {
                 if (curl_errno($this->ch) == CURLE_OPERATION_TIMEDOUT) {
                     $attempt++;
@@ -83,10 +87,27 @@ class HttpClient
                 }
 
                 sleep(self::WAIT_TIME_STEP * $attempt);
+            } elseif ($this->httpCode === 429) {
+                $attempt++;
+                $penaltySeconds = $this->compute429PenaltySeconds($attempt);
+                $this->applyRateLimitPenalty($penaltySeconds);
+
+                if ($attempt > self::MAX_ATTEMPTS) {
+                    $this->timer->stop();
+                    throw new \Exception("Osiągnięto limit zapytań API (429) po " . self::MAX_ATTEMPTS . " próbach.", 1);
+                }
+
+                echo PHP_EOL . sprintf(
+                    "[429 RETRY] %s: próba %d/%d, odczekuję %ds",
+                    $this->rateLimitLabel,
+                    $attempt,
+                    self::MAX_ATTEMPTS,
+                    $penaltySeconds
+                ) . PHP_EOL;
+                sleep($penaltySeconds);
             } else
                 $success = true;
 
-            $this->httpCode = (int) curl_getinfo($this->ch, CURLINFO_HTTP_CODE);
             curl_close($this->ch);
         } while ($attempt <= self::MAX_ATTEMPTS && !$success);
 
@@ -149,7 +170,11 @@ class HttpClient
                 $error = curl_errno($ch);
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-                if ($content === false || $error || $httpCode >= 500 || empty($content)) {
+                if ($httpCode === 429) {
+                    $this->applyRateLimitPenalty($this->compute429PenaltySeconds($attempts[$key] + 1));
+                }
+
+                if ($content === false || $error || $httpCode >= 500 || $httpCode === 429 || empty($content)) {
                     if ($attempts[$key] < $maxAttempts) {
                         $attempts[$key]++;
                         $nextPending[$key] = $paths[$key];
@@ -227,6 +252,8 @@ class HttpClient
             return;
         }
 
+        $effectiveRpm = max(1, (int) floor($this->rpm * self::RATE_LIMIT_SAFETY_FACTOR));
+
         while (true) {
             $lockHandle = fopen($this->getRateLimitStorePath(), 'c+');
             if ($lockHandle === false) {
@@ -248,11 +275,30 @@ class HttpClient
 
             $now = microtime(true);
             $store = $this->pruneRateLimitStore($store, $now);
-            $window = $store[$this->rateLimitKey] ?? [];
+            $bucket = $this->normalizeRateLimitBucket($store[$this->rateLimitKey] ?? null);
+            $window = $bucket['timestamps'];
 
-            if (count($window) < $this->rpm) {
+            $blockedUntil = (float) $bucket['blockedUntil'];
+            $blockedForSeconds = max(0.0, $blockedUntil - $now);
+            if ($blockedForSeconds > 0) {
+                flock($lockHandle, LOCK_UN);
+                fclose($lockHandle);
+
+                echo PHP_EOL . sprintf(
+                    "[RATE LIMIT] %s: aktywna blokada po 429, oczekiwanie %.2fs",
+                    $this->rateLimitLabel,
+                    $blockedForSeconds
+                ) . PHP_EOL;
+                usleep((int) ceil($blockedForSeconds * 1000000));
+                continue;
+            }
+
+            if (count($window) < $effectiveRpm) {
                 $window[] = $now;
-                $store[$this->rateLimitKey] = $window;
+                $store[$this->rateLimitKey] = [
+                    'timestamps' => $window,
+                    'blockedUntil' => 0.0,
+                ];
 
                 ftruncate($lockHandle, 0);
                 rewind($lockHandle);
@@ -270,9 +316,10 @@ class HttpClient
 
             if ($waitSeconds > 0) {
                 echo PHP_EOL . sprintf(
-                    "[RATE LIMIT] %s: %d/min, oczekiwanie %.2fs przed kolejnym zapytaniem",
+                    "[RATE LIMIT] %s: %d/min (efektywnie %d/min), oczekiwanie %.2fs przed kolejnym zapytaniem",
                     $this->rateLimitLabel,
                     $this->rpm,
+                    $effectiveRpm,
                     $waitSeconds
                 ) . PHP_EOL;
                 usleep((int) ceil($waitSeconds * 1000000));
@@ -287,11 +334,10 @@ class HttpClient
 
     private function pruneRateLimitStore(array $store, float $now): array
     {
-        foreach ($store as $key => $timestamps) {
-            if (!is_array($timestamps)) {
-                unset($store[$key]);
-                continue;
-            }
+        foreach ($store as $key => $bucketData) {
+            $bucket = $this->normalizeRateLimitBucket($bucketData);
+            $timestamps = $bucket['timestamps'];
+            $blockedUntil = (float) $bucket['blockedUntil'];
 
             $filtered = array_values(array_filter(
                 $timestamps,
@@ -299,15 +345,91 @@ class HttpClient
                     && ($now - (float) $timestamp) < self::RATE_LIMIT_WINDOW_SECONDS
             ));
 
-            if (empty($filtered)) {
+            if (empty($filtered) && $blockedUntil <= $now) {
                 unset($store[$key]);
                 continue;
             }
 
-            $store[$key] = $filtered;
+            $store[$key] = [
+                'timestamps' => $filtered,
+                'blockedUntil' => $blockedUntil,
+            ];
         }
 
         return $store;
+    }
+
+    private function normalizeRateLimitBucket($bucketData): array
+    {
+        if (is_array($bucketData) && array_key_exists('timestamps', $bucketData)) {
+            return [
+                'timestamps' => is_array($bucketData['timestamps']) ? $bucketData['timestamps'] : [],
+                'blockedUntil' => isset($bucketData['blockedUntil']) && is_numeric($bucketData['blockedUntil'])
+                    ? (float) $bucketData['blockedUntil']
+                    : 0.0,
+            ];
+        }
+
+        // Backward compatibility with the previous format where value was just timestamps array.
+        if (is_array($bucketData)) {
+            return [
+                'timestamps' => $bucketData,
+                'blockedUntil' => 0.0,
+            ];
+        }
+
+        return [
+            'timestamps' => [],
+            'blockedUntil' => 0.0,
+        ];
+    }
+
+    private function applyRateLimitPenalty(int $penaltySeconds): void
+    {
+        if ($this->rateLimitKey === null || $penaltySeconds <= 0) {
+            return;
+        }
+
+        $lockHandle = fopen($this->getRateLimitStorePath(), 'c+');
+        if ($lockHandle === false) {
+            return;
+        }
+
+        if (!flock($lockHandle, LOCK_EX)) {
+            fclose($lockHandle);
+            return;
+        }
+
+        rewind($lockHandle);
+        $rawStore = stream_get_contents($lockHandle);
+        $store = json_decode($rawStore ?: '{}', true);
+        if (!is_array($store)) {
+            $store = [];
+        }
+
+        $bucket = $this->normalizeRateLimitBucket($store[$this->rateLimitKey] ?? null);
+        $now = microtime(true);
+        $newBlockedUntil = $now + $penaltySeconds;
+        $bucket['blockedUntil'] = max((float) $bucket['blockedUntil'], $newBlockedUntil);
+        $store[$this->rateLimitKey] = $bucket;
+
+        $store = $this->pruneRateLimitStore($store, $now);
+
+        ftruncate($lockHandle, 0);
+        rewind($lockHandle);
+        fwrite($lockHandle, json_encode($store));
+        fflush($lockHandle);
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+    }
+
+    private function compute429PenaltySeconds(int $attempt): int
+    {
+        $attemptPenalty = self::RATE_LIMIT_429_BASE_PENALTY_SECONDS * max(1, $attempt);
+        $cappedPenalty = min($attemptPenalty, self::RATE_LIMIT_429_MAX_PENALTY_SECONDS);
+        $jitter = random_int(0, 3);
+
+        return $cappedPenalty + $jitter;
     }
 
     private function removeUnprintableChars()
