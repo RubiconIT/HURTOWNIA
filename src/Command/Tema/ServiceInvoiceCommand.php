@@ -48,7 +48,7 @@ class ServiceInvoiceCommand extends BaseApiCommand
         $this->docRepo->addRelatedRepository($this->itemRepo, 'items');
 
         // Czyszczenie danych z zakresu dat
-        $dateFrom = new \DateTime('first day of 2 months ago');
+        $dateFrom = new \DateTime('first day of 1 month ago');
         $dateTo = new \DateTime();
         $this->docRepo->removeDateRangeTema($dateFrom, $dateTo);
 

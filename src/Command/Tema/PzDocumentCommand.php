@@ -43,7 +43,7 @@ class PzDocumentCommand extends BaseApiCommand
         $this->docRepo->addRelatedRepository($this->itemRepo, 'items');
 
         // Czyszczenie danych z zakresu dat
-        $dateFrom = new \DateTime('first day of 1 month ago');
+        $dateFrom = new \DateTime('2 weeks ago');
         $dateTo = new \DateTime();
         $this->docRepo->removeDateRangeTema($dateFrom, $dateTo);
 
