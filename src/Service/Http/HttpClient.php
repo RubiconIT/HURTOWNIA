@@ -20,9 +20,11 @@ class HttpClient
     private $timer;
     private $rpm;
     private $rateLimitKey;
-    private $requestWindows = [];
+    private $rateLimitLabel;
     private const MAX_ATTEMPTS = 3;
     private const WAIT_TIME_STEP = 10; // seconds
+    private const RATE_LIMIT_WINDOW_SECONDS = 60;
+    private const RATE_LIMIT_STORE_FILE = '/hurtownia_http_rate_limit.json';
     private $tryColors = [
         "\033[0;32m", // green
         "\033[0;33m", // yellow
@@ -211,7 +213,12 @@ class HttpClient
         $this->authType = $apiConn->getAuthType();
         $this->baseUrl = $apiConn->getBaseUrl();
         $this->rpm = $apiConn->getRpm();
-        $this->rateLimitKey = sprintf('%s|%s', $apiConn->getName(), $this->baseUrl);
+        $this->rateLimitKey = hash('sha256', implode('|', [
+            (string) $this->baseUrl,
+            (string) $this->authType,
+            (string) $this->auth,
+        ]));
+        $this->rateLimitLabel = sprintf('%s|%s', $apiConn->getName(), $this->baseUrl);
     }
 
     private function enforceRateLimit(): void
@@ -220,36 +227,87 @@ class HttpClient
             return;
         }
 
-        if (!isset($this->requestWindows[$this->rateLimitKey])) {
-            $this->requestWindows[$this->rateLimitKey] = [];
-        }
-
-        $window = &$this->requestWindows[$this->rateLimitKey];
-
         while (true) {
+            $lockHandle = fopen($this->getRateLimitStorePath(), 'c+');
+            if ($lockHandle === false) {
+                throw new \RuntimeException('Nie można otworzyć pliku limitu zapytań API');
+            }
+
+            if (!flock($lockHandle, LOCK_EX)) {
+                fclose($lockHandle);
+                usleep(100000);
+                continue;
+            }
+
+            rewind($lockHandle);
+            $rawStore = stream_get_contents($lockHandle);
+            $store = json_decode($rawStore ?: '{}', true);
+            if (!is_array($store)) {
+                $store = [];
+            }
+
             $now = microtime(true);
-            $window = array_values(array_filter(
-                $window,
-                static fn(float $timestamp): bool => ($now - $timestamp) < 60
-            ));
+            $store = $this->pruneRateLimitStore($store, $now);
+            $window = $store[$this->rateLimitKey] ?? [];
 
             if (count($window) < $this->rpm) {
                 $window[] = $now;
+                $store[$this->rateLimitKey] = $window;
+
+                ftruncate($lockHandle, 0);
+                rewind($lockHandle);
+                fwrite($lockHandle, json_encode($store));
+                fflush($lockHandle);
+                flock($lockHandle, LOCK_UN);
+                fclose($lockHandle);
                 break;
             }
 
-            $oldest = $window[0];
-            $waitSeconds = max(0, 60 - ($now - $oldest));
+            $oldest = (float) $window[0];
+            $waitSeconds = max(0, self::RATE_LIMIT_WINDOW_SECONDS - ($now - $oldest));
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
+
             if ($waitSeconds > 0) {
                 echo PHP_EOL . sprintf(
                     "[RATE LIMIT] %s: %d/min, oczekiwanie %.2fs przed kolejnym zapytaniem",
-                    $this->rateLimitKey,
+                    $this->rateLimitLabel,
                     $this->rpm,
                     $waitSeconds
                 ) . PHP_EOL;
                 usleep((int) ceil($waitSeconds * 1000000));
             }
         }
+    }
+
+    private function getRateLimitStorePath(): string
+    {
+        return sys_get_temp_dir() . self::RATE_LIMIT_STORE_FILE;
+    }
+
+    private function pruneRateLimitStore(array $store, float $now): array
+    {
+        foreach ($store as $key => $timestamps) {
+            if (!is_array($timestamps)) {
+                unset($store[$key]);
+                continue;
+            }
+
+            $filtered = array_values(array_filter(
+                $timestamps,
+                static fn($timestamp): bool => is_numeric($timestamp)
+                    && ($now - (float) $timestamp) < self::RATE_LIMIT_WINDOW_SECONDS
+            ));
+
+            if (empty($filtered)) {
+                unset($store[$key]);
+                continue;
+            }
+
+            $store[$key] = $filtered;
+        }
+
+        return $store;
     }
 
     private function removeUnprintableChars()
