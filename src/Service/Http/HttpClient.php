@@ -24,7 +24,6 @@ class HttpClient
     private const MAX_ATTEMPTS = 3;
     private const WAIT_TIME_STEP = 10; // seconds
     private const RATE_LIMIT_WINDOW_SECONDS = 60;
-    private const RATE_LIMIT_STORE_FILE = '/hurtownia_http_rate_limit.json';
     private const RATE_LIMIT_SAFETY_FACTOR = 0.85;
     private const RATE_LIMIT_429_BASE_PENALTY_SECONDS = 30;
     private const RATE_LIMIT_429_MAX_PENALTY_SECONDS = 180;
@@ -33,6 +32,8 @@ class HttpClient
         "\033[0;33m", // yellow
         "\033[0;31m", // red
     ];
+    private static $processRateLimitStore = [];
+    private $rateLimitStoreFallbackNotified = false;
     
 
     public function __construct()
@@ -255,9 +256,10 @@ class HttpClient
         $effectiveRpm = max(1, (int) floor($this->rpm * self::RATE_LIMIT_SAFETY_FACTOR));
 
         while (true) {
-            $lockHandle = fopen($this->getRateLimitStorePath(), 'c+');
+            $lockHandle = $this->openRateLimitStoreHandle();
             if ($lockHandle === false) {
-                throw new \RuntimeException('Nie można otworzyć pliku limitu zapytań API');
+                $this->enforceRateLimitInProcess($effectiveRpm);
+                return;
             }
 
             if (!flock($lockHandle, LOCK_EX)) {
@@ -327,9 +329,77 @@ class HttpClient
         }
     }
 
-    private function getRateLimitStorePath(): string
+    private function getRateLimitStorePath(): ?string
     {
-        return sys_get_temp_dir() . self::RATE_LIMIT_STORE_FILE;
+        $envPath = $_ENV['HURTOWNIA_RATE_LIMIT_STORE_PATH'] ?? getenv('HURTOWNIA_RATE_LIMIT_STORE_PATH');
+        if (!empty($envPath) && is_string($envPath) && trim($envPath) !== '') {
+            return $envPath;
+        }
+
+        return null;
+    }
+
+    private function openRateLimitStoreHandle()
+    {
+        $path = $this->getRateLimitStorePath();
+        if ($path === null) {
+            return false;
+        }
+
+        $directory = dirname($path);
+        if (!is_dir($directory) && !@mkdir($directory, 0775, true) && !is_dir($directory)) {
+            return false;
+        }
+
+        if (!is_writable($directory)) {
+            return false;
+        }
+
+        $handle = @fopen($path, 'c+');
+        if ($handle === false) {
+            return false;
+        }
+
+        return $handle;
+    }
+
+    private function enforceRateLimitInProcess(int $effectiveRpm): void
+    {
+        if (!$this->rateLimitStoreFallbackNotified) {
+            echo PHP_EOL . sprintf(
+                '[RATE LIMIT] %s: brak dostępu do pliku współdzielonego, używam limitu lokalnego procesu',
+                $this->rateLimitLabel
+            ) . PHP_EOL;
+            $this->rateLimitStoreFallbackNotified = true;
+        }
+
+        while (true) {
+            $now = microtime(true);
+            self::$processRateLimitStore = $this->pruneRateLimitStore(self::$processRateLimitStore, $now);
+            $bucket = $this->normalizeRateLimitBucket(self::$processRateLimitStore[$this->rateLimitKey] ?? null);
+            $window = $bucket['timestamps'];
+
+            $blockedForSeconds = max(0.0, (float) $bucket['blockedUntil'] - $now);
+            if ($blockedForSeconds > 0) {
+                usleep((int) ceil($blockedForSeconds * 1000000));
+                continue;
+            }
+
+            if (count($window) < $effectiveRpm) {
+                $window[] = $now;
+                self::$processRateLimitStore[$this->rateLimitKey] = [
+                    'timestamps' => $window,
+                    'blockedUntil' => 0.0,
+                ];
+                break;
+            }
+
+            $oldest = (float) $window[0];
+            $waitSeconds = max(0, self::RATE_LIMIT_WINDOW_SECONDS - ($now - $oldest));
+            if ($waitSeconds > 0) {
+                usleep((int) ceil($waitSeconds * 1000000));
+            }
+        }
     }
 
     private function pruneRateLimitStore(array $store, float $now): array
@@ -390,8 +460,14 @@ class HttpClient
             return;
         }
 
-        $lockHandle = fopen($this->getRateLimitStorePath(), 'c+');
+        $lockHandle = $this->openRateLimitStoreHandle();
         if ($lockHandle === false) {
+            $now = microtime(true);
+            $bucket = $this->normalizeRateLimitBucket(self::$processRateLimitStore[$this->rateLimitKey] ?? null);
+            $newBlockedUntil = $now + $penaltySeconds;
+            $bucket['blockedUntil'] = max((float) $bucket['blockedUntil'], $newBlockedUntil);
+            self::$processRateLimitStore[$this->rateLimitKey] = $bucket;
+            self::$processRateLimitStore = $this->pruneRateLimitStore(self::$processRateLimitStore, $now);
             return;
         }
 
