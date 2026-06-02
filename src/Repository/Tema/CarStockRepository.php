@@ -64,7 +64,9 @@ class CarStockRepository extends IApiRepository
 
     private function getStocks()
     {
-        $q = "SELECT stock_id FROM tema_stock WHERE category != 'workshop' AND name NOT LIKE '%części%' AND source = :source";
+        $q = "SELECT stock_id FROM tema_stock WHERE category != 'workshop'
+            AND (name NOT LIKE '%części%' OR name NOT LIKE '%HURT%')
+            AND source = :source";
         return $this->db->fetchFirstColumn($q, ['source' => $this->source->getName()], ['source' => ParameterType::STRING]);
     }
 }
