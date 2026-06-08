@@ -8,7 +8,7 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: CarsSoldRepository::class)]
 #[ORM\Table(name: 'rogowiec_car_invoices')]
-#[ORM\Index(name: "car_invoices_unique", columns: ["source", "vin", "fv_numer"])]
+#[ORM\UniqueConstraint(name: "car_invoices_unique", columns: ["source", "vin", "fv_numer", "wartosc"])]
 #[ORM\Index(name: "source_idx", columns: ["source"])]
 #[ORM\Index(name: "vin_idx", columns: ["vin", "fv_numer"])]
 #[ORM\Index(name: "fv_data_idx", columns: ["fv_data"])]
