@@ -24,29 +24,30 @@ class CarsInvoicesRepository extends IApiRepository
     public function fetch(): array
     {
         $this->clearDataArrays();
-        $branches = $this->findBrachesId();
+        // $branches = $this->findBrachesId();
         $vins = $this->findVins();
         $resCount = 0;
         
-        $totalBranches = count($branches);
+        // $totalBranches = count($branches);
         $totalVins = count($vins);
         
-        if ($totalBranches === 0) {
-            throw new \Exception("Brak oddziałów dla " . $this->source->getName() . ". Najpierw uruchom komendę pobierającą listę oddziałów [rogowiec:branch]", 99);
-        }
+        // if ($totalBranches === 0) {
+        //     throw new \Exception("Brak oddziałów dla " . $this->source->getName() . ". Najpierw uruchom komendę pobierającą listę oddziałów [rogowiec:branch]", 99);
+        // }
         
         if ($totalVins === 0) {
             throw new \Exception("Brak VINów dla " . $this->source->getName() . ". Najpierw uruchom komendę pobierającą sprzedane samochody [rogowiec:cars:sold]", 99);
         }
         
-        echo "\nPobieram faktury samochodów dla $totalVins VINów x $totalBranches oddziałów w batch'ach po " . self::BATCH_SIZE;
+        echo "\nPobieram faktury samochodów dla $totalVins VINów w batch'ach po " . self::BATCH_SIZE;
         
         // Create all VIN x Branch combinations
         $allRequests = [];
         foreach ($vins as $vinData) {
             $vin = $vinData['vin'];
-            foreach ($branches as $branch) {
-                $branchId = $branch['branch_id'];
+            // foreach ($branches as $branch) {
+                // $branchId = $branch['branch_id'];
+                $branchId = $vinData['branch_id'];
                 $allRequests[] = [
                     'vin' => $vin,
                     'branch_id' => $branchId,
@@ -56,7 +57,7 @@ class CarsInvoicesRepository extends IApiRepository
                         $this->endpoint
                     )
                 ];
-            }
+            // }
         }
         
         $totalRequests = count($allRequests);
@@ -145,14 +146,17 @@ class CarsInvoicesRepository extends IApiRepository
 
     private function findVins()
     {
-        $q = "SELECT
+        $q = "SELECT DISTINCT
                 s.source,
-                s.vin
+                s.vin,
+                rb.dms_id AS branch_id
             FROM prehurtownia.rogowiec_cars_sold s
+            JOIN prehurtownia.rogowiec_branch rb ON rb.source = s.source AND rb.oddzial_id = CONCAT('0', SUBSTRING(s.fv_numer, 1, 1))
             LEFT JOIN prehurtownia.rogowiec_car_invoices rci ON rci.source = s.source AND rci.vin = s.vin
             WHERE s.source = :source
                 AND COALESCE(rci.fetch_date, '1970-01-01') <= DATE_SUB(NOW(), INTERVAL 3 DAY)
                 AND s.korekty_wartosc != 0
+            ORDER BY vin
                 
         ";
         return $this->db->fetchAllAssociative($q, ['source' => $this->source->getName()], ['source' => ParameterType::STRING]);
