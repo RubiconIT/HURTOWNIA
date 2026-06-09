@@ -77,7 +77,9 @@ class TaskReporter
 
             $problems[] = [
                 'source' => $e->getSource(),
-                'endpoint' => $e->getEndpoint()
+                'endpoint' => $e->getEndpoint(),
+                'http_code' => $e->getHttpCode(),
+                'time' => $e->getTime()->format('Y-m-d H:i:s')
             ];
         }
         
