@@ -60,10 +60,10 @@ class ExceptionSubscriber implements EventSubscriberInterface
     {
         if ($this->id == true) {
             
-            $problems = $this->taskReporter->sendFetchErrors();
+            $command = $event->getCommand();
+            $problems = $this->taskReporter->sendFetchErrors($command->getName());
             if ($problems !== '') {
                 dump($problems);
-                $command = $event->getCommand();
                 $this->taskReporter->setError($this->id, $problems, $command->getName());
             }
             

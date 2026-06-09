@@ -63,11 +63,11 @@ class TaskReporter
         $this->alert->sendCommandAlert($command, $msg);
     }
 
-    public function sendFetchErrors()
+    public function sendFetchErrors(string $commandName)
     {
         $errors = [];
         $problems = [];
-        foreach ($this->errorRepo->findAll() as $e) {
+        foreach ($this->errorRepo->findBy(['command' => $commandName]) as $e) {
             $errors[] = [
                 'source' => $e->getSource(),
                 'endpoint' => $e->getEndpoint(),
