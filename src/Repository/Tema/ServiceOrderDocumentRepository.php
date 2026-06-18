@@ -23,6 +23,9 @@ class ServiceOrderDocumentRepository extends IApiRepository
         service_handling_user_id = VALUES(service_handling_user_id),
         description = VALUES(description),
         source_order_number = VALUES(source_order_number),
+        claim_number = VALUES(claim_number),
+        insurer_id = VALUES(insurer_id),
+        insurance_company_contribution = VALUES(insurance_company_contribution),
         source_order_id = VALUES(source_order_id)
     ';
 
@@ -172,6 +175,9 @@ class ServiceOrderDocumentRepository extends IApiRepository
             'description' => ['sourceField' => 'description', 'type' => ParameterType::STRING],
             'source_order_number' => ['sourceField' => 'sourceOrderNumber', 'type' => ParameterType::STRING],
             'source_order_id' => ['sourceField' => 'sourceOrderId', 'type' => ParameterType::STRING],
+            'claim_number' => ['sourceField' => 'claimNumber', 'type' => ParameterType::STRING],
+            'insurer_id' => ['sourceField' => 'insurerId', 'type' => ParameterType::STRING],
+            'insurance_company_contribution' => ['sourceField' => 'insuranceCompanyContribution', 'type' => ParameterType::STRING],
             'source' => ['sourceField' => 'source', 'type' => ParameterType::STRING],
         ];
     }

@@ -37,7 +37,7 @@ class ServiceOrderDocument
     private ?\DateTimeInterface $closingDate = null;
 
     #[ORM\Column(type: Types::BOOLEAN)]
-    private ?\DateTimeInterface $isCanceled = null;
+    private ?bool $isCanceled = null;
 
     #[ORM\Column(type: Types::DECIMAL, precision: 12, scale: 2)]
     private ?string $netValue = null;
@@ -62,4 +62,13 @@ class ServiceOrderDocument
 
     #[ORM\Column(length: 12, nullable: true)]
     private ?string $sourceOrderId = null;
+
+    #[ORM\Column(length: 50, nullable: true)]
+    public readonly ?string $claimNumber;
+
+    #[ORM\Column(length: 20, nullable: true)]
+    public readonly ?string $insurerId;
+
+    #[ORM\Column(length: 30, nullable: true)]
+    public readonly ?string $insuranceCompanyContribution;
 }
