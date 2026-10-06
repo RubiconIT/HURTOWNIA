@@ -43,7 +43,7 @@ class FvCorrectionDocumentCommand extends BaseApiCommand
         $this->docRepo->addRelatedRepository($this->itemRepo, 'items');
 
         // Czyszczenie danych z zakresu dat
-        $dateFrom = new \DateTime('first day of 2 months ago');
+        $dateFrom = new \DateTime('first day of 3 months ago');
         $dateTo = new \DateTime();
         $this->docRepo->removeDateRangeTema($dateFrom, $dateTo);
 
