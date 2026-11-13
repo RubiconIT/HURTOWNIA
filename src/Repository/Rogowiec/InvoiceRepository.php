@@ -62,9 +62,10 @@ class InvoiceRepository extends IApiRepository
             }
 
             // Save when we have enough data
-            if (count($this->fetchResult) >= $this->fetchLimit) {
+            if (count($this->fetchResult) >= 10) {
                 $this->save();
                 $this->fetchResult = [];
+                $this->archive();
             }
         }
 
@@ -72,6 +73,7 @@ class InvoiceRepository extends IApiRepository
         if (!empty($this->fetchResult)) {
             $this->save();
             $this->fetchResult = [];
+            $this->archive();
         }
 
         return [
