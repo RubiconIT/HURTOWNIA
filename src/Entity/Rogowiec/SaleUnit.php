@@ -10,6 +10,7 @@ use Doctrine\ORM\Mapping\Table;
 #[ORM\Entity(repositoryClass: OrgUnitRepository::class)]
 #[Table(name: 'rogowiec_sale_unit')]
 #[Index(name: "source_idx", fields: ["source"])]
+#[ORM\UniqueConstraint(name: "resource_id_source_unique", columns: ["resource_id", "source"])]
 class SaleUnit
 {
     #[ORM\Id]

@@ -9,6 +9,12 @@ class SaleUnitRepository extends IApiRepository
 {
     private string $endpoint = '/api/GetOrgUnits?UnitType=SALE';
     protected $table = 'rogowiec_sale_unit';
+    protected $onDuplicateClause = "ON DUPLICATE KEY UPDATE 
+        dms_id = VALUES(dms_id),
+        name = VALUES(name),
+        type = VALUES(type),
+        label = VALUES(label)
+    ";    
 
     public function fetch(): array
     {

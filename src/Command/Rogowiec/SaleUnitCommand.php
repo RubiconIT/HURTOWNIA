@@ -42,6 +42,6 @@ class SaleUnitCommand extends BaseApiCommand
 
     protected function clearTable()
     {
-        $this->repo->clearTable();
+        // $this->repo->clearTable();
     }
 }
